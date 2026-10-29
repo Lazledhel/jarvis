@@ -1,0 +1,4 @@
+{
+  "server_url": "https://assistant.example.test:8765",
+  "token": "REPLACE_WITH_RANDOM_SHARED_SECRET"
+}

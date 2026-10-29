@@ -1,0 +1,32 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+/local/
+local.properties
+*.key
+*.pem
+*.crt
+*.p12
+*.jks
+*.keystore
+provision.json
+# Generated artifacts and runtime data
+.gradle/
+.idea/
+.cache/
+build/
+**/build/
+*.apk
+*.idsig
+*.class
+__pycache__/
+.venv/
+*.log
+dialogues/
+models/
+voices/
+reference/
+android/app/src/main/assets/*
+!android/app/src/main/assets/README.md
+model/

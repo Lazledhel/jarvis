@@ -1,0 +1,3 @@
+-r requirements.txt
+coqui-tts
+torch

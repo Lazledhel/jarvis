@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+faster-whisper
+piper-tts
+openai
+numpy
+ddgs
+tzdata

@@ -1,0 +1,19 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="14" android:versionName="2.1">
+ <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="32"/>
+ <uses-permission android:name="android.permission.INTERNET"/>
+ <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+ <uses-permission android:name="android.permission.WAKE_LOCK"/>
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+ <uses-permission android:name="android.permission.READ_CONTACTS"/>
+ <uses-permission android:name="android.permission.CALL_PHONE"/>
+ <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+ <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+ <queries><package android:name="com.v2raytun.android"/><package android:name="ru.yandex.yandexmaps"/><package android:name="com.google.android.apps.maps"/></queries>
+ <application android:label="Джарвис" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:usesCleartextTraffic="false" android:extractNativeLibs="true" android:icon="@android:drawable/ic_btn_speak_now">
+  <activity android:name=".Main" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+  <activity android:name=".ActionScreen" android:exported="false" android:excludeFromRecents="true" android:theme="@android:style/Theme.Material.Dialog.Alert"/>
+  <service android:name=".Assistant" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="microphone"/>
+  <service android:name=".QuickTile" android:label="Джарвис" android:icon="@android:drawable/ic_btn_speak_now" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE" android:exported="true"><intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter></service>
+ </application>
+</manifest>
