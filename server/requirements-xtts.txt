@@ -1,3 +1,4 @@
 -r requirements.txt
 coqui-tts
 torch
+spacy==3.8.18

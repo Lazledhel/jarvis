@@ -15,6 +15,7 @@ from openai import OpenAI
 from provider import generate
 from reply_language import choose_language
 from dialogues import Dialogues
+from speech_errors import synthesize
 dialogs=Dialogues(os.getenv('JARVIS_DIALOG_DIR',str(ROOT/'dialogues')))
 app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
 gate=threading.Lock();voices={};whisper=None
@@ -116,7 +117,7 @@ def answer(data):
  if not reply:raise HTTPException(502,'Empty response')
  dialogs.finish(session,text,reply,sources,action)
  spoken=re.sub(r'https?://\S+','',re.sub(r'\[([^\]]+)\]\([^)]+\)',r'\1',reply));spoken=re.sub(r'[*#`]','',spoken)[:3500]
- audio=tts(spoken,lang)
+ audio=synthesize(tts,spoken,lang)
  return {'heard':text,'reply':reply,'language':lang,'sources':sources,'audio':base64.b64encode(audio).decode(),'api_key_ready':bool(os.getenv('AIML_API_KEY')),'conversation_id':session['id'],'action':action}
 @app.post('/action-result')
 async def action_result(request:Request):
