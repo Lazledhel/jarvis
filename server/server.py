@@ -16,8 +16,11 @@ from provider import generate
 from reply_language import choose_language
 from dialogues import Dialogues
 from speech_errors import synthesize
+from computer_bridge import ComputerQueue,computer_reply,routes
 dialogs=Dialogues(os.getenv('JARVIS_DIALOG_DIR',str(ROOT/'dialogues')))
 app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
+computer_queue=ComputerQueue(ROOT/'computer-jobs.sqlite3')
+app.include_router(routes(computer_queue))
 gate=threading.Lock();voices={};whisper=None
 TOKEN=os.environ['PHONE_TOKEN'];rate={};rate_lock=threading.Lock()
 def check(request):
@@ -99,7 +102,10 @@ def answer(data):
  lang=choose_language(text,lang)
  if not text:raise HTTPException(422,'Речь не распознана. Повторите, пожалуйста.' if lang=='ru' else 'Speech not recognized. Please repeat.')
  session=dialogs.get(data.get('conversation_id',''));session['language']=lang;dialogs.write(session,'Вы',text);action=None
- if not os.getenv('AIML_API_KEY'):
+ desktop_reply=computer_reply(computer_queue,text,lang)
+ if desktop_reply is not None:
+  reply=desktop_reply;sources=[]
+ elif not os.getenv('AIML_API_KEY'):
   reply='Распознавание работает. Добавьте ключ AI ML API на сервере в файл настройки и перезапустите Джарвиса.' if lang=='ru' else 'Speech recognition works. Add your AI ML API key on the server and restart Jarvis.'
   sources=[]
  else:

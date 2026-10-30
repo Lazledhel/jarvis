@@ -17,3 +17,5 @@ with wave.open(str(cue),'wb') as out:
  out.setnchannels(1);out.setsampwidth(2);out.setframerate(rate)
  out.writeframes(b''.join(struct.pack('<h',int(6500*math.sin(2*math.pi*(660 if i<rate*.09 else 880)*i/rate)*math.sin(math.pi*i/(rate*.18)))) for i in range(int(rate*.18))))
 print('Wake models and neutral cue prepared; generated files are gitignored.')
+
+(root/"wake-grammar.json").write_text('["jarvis", "[unk]"]',encoding="utf-8")

@@ -1,0 +1,8 @@
+{
+  "server_url": "https://assistant.example.test:8765",
+  "token": "REPLACE_WITH_COMPUTER_BRIDGE_TOKEN",
+  "ca_file": "local/server.crt",
+  "codex_exe": "codex.exe",
+  "task_root": "tasks",
+  "state_path": "local/jobs.sqlite3"
+}

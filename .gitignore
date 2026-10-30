@@ -30,3 +30,9 @@ reference/
 android/app/src/main/assets/*
 !android/app/src/main/assets/README.md
 model/
+
+*.sqlite3
+*.sqlite3-*
+/desktop/config.json
+/desktop/local/
+/desktop/tasks/
