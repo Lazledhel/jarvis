@@ -22,8 +22,24 @@ def load():
  config=XttsConfig();config.load_json(str(ROOT/'model/config.json'));model=Xtts.init_from_config(config)
  model.load_checkpoint(config,checkpoint_dir=str(ROOT/'model'),eval=True,use_deepspeed=False);model.cuda()
  conditioning=model.get_conditioning_latents(audio_path=[str(ROOT/'reference/jarvis-reference.wav')],gpt_cond_len=12,max_ref_length=16,sound_norm_refs=True)
+from gpu_idle import IdleResource
+def release_voice():
+ global model,conditioning
+ conditioning=None
+ model=None
+ import gc
+ gc.collect()
+ if torch.cuda.is_initialized():
+  torch.cuda.empty_cache()
+voice_idle=IdleResource(release_voice)
+
+@voice_idle.wrap
 def render(text,lang,effects=True):
- load();t=time.perf_counter()
+ try:load()
+ except Exception:
+  release_voice()
+  raise
+ t=time.perf_counter()
  with torch.inference_mode():
   result=model.inference(text,lang,*conditioning,temperature=0.65,repetition_penalty=5.0,speed=1.06,enable_text_splitting=True)
  wav=np.asarray(result['wav'],dtype=np.float32)
@@ -40,10 +56,15 @@ def render(text,lang,effects=True):
  last_timing={'language':lang,'synthesis_seconds':round(time.perf_counter()-t,3),'audio_seconds':round(len(wav)/24000,3),'gpu_memory_mib':round(torch.cuda.memory_allocated()/1048576)}
  return out.getvalue()
 @app.on_event('startup')
-def warm():
- load();render('Готов.','ru');render('Ready.','en')
+def start_idle_monitor():
+ voice_idle.start()
+
+@app.on_event('shutdown')
+def stop_idle_monitor():
+ voice_idle.stop.set()
+
 @app.get('/health')
-def health(request:Request):authorize(request);return {'ready':model is not None,'engine':'XTTS-v2','voice':'Priler jarvis-remaster reference','last_timing':last_timing}
+def health(request:Request):authorize(request);return {'ready':True,'model_loaded':model is not None,'gpu_idle_seconds':voice_idle.seconds,'engine':'XTTS-v2','voice':'Priler jarvis-remaster reference','last_timing':last_timing}
 @app.post('/tts')
 async def speak(request:Request):
  authorize(request)

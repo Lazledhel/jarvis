@@ -44,6 +44,15 @@ def tts(text,lang):
  out=io.BytesIO()
  with wave.open(out,'wb') as wav:voices[name].synthesize_wav(text,wav)
  return out.getvalue()
+from gpu_idle import IdleResource
+def release_whisper():
+ global whisper
+ whisper=None
+ import gc
+ gc.collect()
+whisper_idle=IdleResource(release_whisper)
+
+@whisper_idle.wrap
 def stt(audio):
  global whisper
  import numpy as np
@@ -57,22 +66,15 @@ def stt(audio):
  return ' '.join(s.text.strip() for s in segments).strip(),info.language
 @app.get('/health')
 def health(request:Request):
- check(request);return {'ok':True,'api_key_ready':bool(os.getenv('AIML_API_KEY')),'provider':'AI/ML API','model':os.getenv('AIML_MODEL','gpt-6-luna'),'stt':'Whisper '+os.getenv('WHISPER_MODEL','medium')+' CUDA','tts':os.getenv('JARVIS_TTS_ENGINE','piper'),'context_timeout_seconds':180,'dialogues_txt':True}
+ check(request);return {'ok':True,'api_key_ready':bool(os.getenv('AIML_API_KEY')),'provider':'AI/ML API','model':os.getenv('AIML_MODEL','gpt-6-luna'),'stt':'Whisper '+os.getenv('WHISPER_MODEL','medium')+' CUDA','tts':os.getenv('JARVIS_TTS_ENGINE','piper'),'context_timeout_seconds':180,'dialogues_txt':True,'stt_loaded':whisper is not None,'gpu_idle_seconds':whisper_idle.seconds}
 @app.on_event('startup')
-def warm_models():
- global whisper
- import numpy as np
- whisper=WhisperModel(os.getenv('WHISPER_MODEL','medium'),device=os.getenv('WHISPER_DEVICE','cuda'),compute_type=os.getenv('WHISPER_COMPUTE_TYPE','int8_float16'),cpu_threads=3,num_workers=1,download_root=os.getenv('WHISPER_MODEL_DIR',str(ROOT/'models')),local_files_only=False)
- list(whisper.transcribe(np.zeros(16000,dtype=np.float32),language='en',beam_size=1,best_of=1,vad_filter=False)[0])
- if os.getenv('JARVIS_TTS_ENGINE','piper')=='xtts':
-  import urllib.request
-  for _ in range(90):
-   try:
-    req=urllib.request.Request(os.getenv('JARVIS_VOICE_URL','http://localhost:8766/tts').rsplit('/',1)[0]+'/health',headers={'Authorization':'Bearer '+TOKEN})
-    with urllib.request.urlopen(req,timeout=2):break
-   except Exception:time.sleep(1)
-  else:raise RuntimeError('Voice worker not ready')
- tts('Готов.','ru');tts('Ready.','en')
+def start_idle_monitor():
+ whisper_idle.start()
+
+@app.on_event('shutdown')
+def stop_idle_monitor():
+ whisper_idle.stop.set()
+
 @app.post('/ask')
 async def ask(request:Request):
  check(request)
