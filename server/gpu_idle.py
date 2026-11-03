@@ -3,6 +3,7 @@ import functools
 import os
 import threading
 import time
+from developer_priority import voice_priority
 
 class IdleResource:
     def __init__(self, release, seconds=None, clock=time.monotonic):
@@ -18,7 +19,8 @@ class IdleResource:
         def call(*args, **kwargs):
             with self.lock:
                 try:
-                    return function(*args, **kwargs)
+                    with voice_priority():
+                        return function(*args, **kwargs)
                 finally:
                     self.last = self.clock()
         return call

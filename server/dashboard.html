@@ -1,0 +1,554 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jarvis</title>
+<style>
+body{margin:0;background:linear-gradient(135deg,#101c32,#163f55,#181b32) fixed;color:white;font:16px system-ui}
+header,nav,main{max-width:920px;margin:auto;padding:16px} header{letter-spacing:.5em;font-size:24px}
+button,input,select{padding:10px 16px;border:1px solid #6492ad;border-radius:14px;background:#19354d;color:white;font:inherit;margin:4px}
+button{cursor:pointer} article{padding:14px;margin:10px 0;border-radius:16px;background:#14283c;white-space:pre-wrap}
+#orb{display:block;margin:20px auto;padding:0;border:0;background:none} img{max-width:100%;border-radius:12px}
+article{overflow-wrap:anywhere}
+.meta{color:#b6cbdc;font-size:.88rem}
+.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.card-body{margin:.55em 0 0}
+.news-title{color:#e1f4ff;text-decoration:none;font-weight:600}
+.news-title:hover,.news-title:focus-visible{text-decoration:underline}
+.camera-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.camera-grid article{min-width:0}.camera-grid img{display:block;width:100%;object-fit:contain}
+.month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center;gap:4px}.month-grid button{padding:8px 2px;margin:0}.month-grid button[aria-pressed=true]{background:#356d89}.month-grid span{padding:6px}
+.month-grid .calendar-cell{aspect-ratio:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;align-items:stretch;text-align:left;padding:6px;border-radius:8px}
+.month-grid .calendar-cell strong{padding:0 3px}
+.month-grid .calendar-rows{min-height:0;overflow:auto;display:block;padding:0}
+.month-grid .calendar-event{display:block;padding:2px 4px;margin-top:3px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:clamp(8px,1.1vw,12px);background:#284e68}
+.month-grid .calendar-event.campus{background:#444372}.month-grid .calendar-event.travel{background:#31594f}.month-grid .calendar-event.personal{background:#694854}
+@media(max-width:520px){header,nav,main{padding:10px}nav button{padding:8px}.month-grid .calendar-cell{padding:2px}.month-grid .calendar-event{font-size:8px;padding:1px 2px}input{max-width:100%;box-sizing:border-box}}
+</style>
+<header>JARVIS</header><nav id="tabs"></nav><main id="panel"></main>
+<script>
+const panel=document.querySelector('#panel'),tabs=document.querySelector('#tabs');
+let active=false,generation=0,cleanup=null;
+function element(tag,text,parent=panel){const e=document.createElement(tag);e.textContent=text;parent.append(e);return e}
+function button(text,action,parent=panel){const b=element('button',text,parent);b.onclick=action;return b}
+function displayDate(value){
+ if(!value)return '';
+ const date=new Date(value);if(!Number.isFinite(date.getTime()))return '';
+ const pad=n=>String(n).padStart(2,'0');
+ return pad(date.getHours())+'.'+pad(date.getMinutes())+' '+pad(date.getDate())+'.'+pad(date.getMonth()+1)+'.'+String(date.getFullYear()).slice(-2);
+}
+const mobile=typeof JarvisAndroid!=='undefined';
+const mobileRequests=new Map();
+let mobileSequence=0;
+window.jarvisAndroidResult=(id,result,error)=>{
+ const pending=mobileRequests.get(id);if(!pending)return;
+ mobileRequests.delete(id);
+ if(error)pending.reject(Error(error));else pending.resolve(JSON.parse(result));
+};
+async function api(path,body){
+ if(mobile)return new Promise((resolve,reject)=>{
+  const id=++mobileSequence;mobileRequests.set(id,{resolve,reject});
+  JarvisAndroid.call(id,path,body===undefined?null:JSON.stringify(body));
+ });
+ const r=await fetch(path,{cache:'no-store',method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+(sessionStorage.token||''),'Content-Type':'application/json'},body:JSON.stringify(body)});
+ if(!r.ok){
+  const error=await r.json().catch(()=>null);
+  const labels={401:'Введите ключ в настройках',502:'Не удалось получить ответ от сервера',504:'Сервер не успел ответить'};
+  throw Error(labels[r.status]||(typeof error?.detail==='string'?error.detail:'Сервер: '+r.status));
+ }
+ return r.json();
+}
+let stopVoice=null,voiceAsk=null,voiceStatus=null,voiceSpeaking=false,phrasePlayer=null;
+let microphoneHealth="Ожидание выключено";
+const voiceClips=new Map();
+function voiceClip(name){
+ if(!voiceClips.has(name))voiceClips.set(name,api('/dashboard/voice/'+name).catch(error=>{voiceClips.delete(name);throw error}));
+ return voiceClips.get(name);
+}
+async function playPhrase(name,stillNeeded=()=>true){
+ const {audio}=await voiceClip(name);
+ if(!stillNeeded())return;
+ const player=new Audio('data:audio/wav;base64,'+audio);
+ phrasePlayer=player;
+ try{
+  await new Promise((resolve,reject)=>{
+   player.onended=player.onpause=resolve;player.onerror=reject;
+   player.play().catch(reject);
+  });
+ }finally{if(phrasePlayer===player)phrasePlayer=null}
+}
+function setVoiceStatus(message){if(voiceStatus)voiceStatus.textContent=message}
+function encodeVoice(samples){
+ const wav=new Uint8Array(44+2*samples.length),data=new DataView(wav.buffer);
+ for(const [offset,word] of [[0,'RIFF'],[8,'WAVEfmt '],[36,'data']])
+  for(let i=0;i<word.length;i++)wav[offset+i]=word.charCodeAt(i);
+ data.setUint32(4,wav.length-8,true);data.setUint32(16,16,true);data.setUint16(20,1,true);data.setUint16(22,1,true);
+ data.setUint32(24,16000,true);data.setUint32(28,32000,true);data.setUint16(32,2,true);data.setUint16(34,16,true);data.setUint32(40,wav.length-44,true);
+ samples.forEach((sample,i)=>data.setInt16(44+i*2,Math.max(-1,Math.min(1,sample))*32767,true));
+ let bytes='';
+ for(let i=0;i<wav.length;i+=8192)bytes+=String.fromCharCode(...wav.subarray(i,i+8192));
+ return btoa(bytes);
+}
+async function startVoice(){
+ let stream,context,processor,stopped=false,waitingUntil=0,processing=false;
+ let samples=[],previous=[],silence=0,watchdog,lastFrame=0;
+ const stop=()=>{
+  stopped=true;clearInterval(watchdog);microphoneHealth="Ожидание выключено";processor?.disconnect();stream?.getTracks().forEach(track=>track.stop());
+  context?.close();phrasePlayer?.pause();if(stopVoice===stop)stopVoice=null;
+ };
+ stopVoice=stop;
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  if(stopped){stream.getTracks().forEach(track=>track.stop());return}
+  context=new AudioContext({sampleRate:16000});
+  await context.resume();
+  if(stopped)return;
+  const source=context.createMediaStreamSource(stream),mute=context.createGain();
+  processor=context.createScriptProcessor(2048,1,1);mute.gain.value=0;
+  source.connect(processor);processor.connect(mute);mute.connect(context.destination);
+  voiceClip('help').catch(()=>{});
+  setVoiceStatus('Жду «Джарвис»');
+  lastFrame=performance.now();
+  microphoneHealth='Работает';
+  watchdog=setInterval(()=>{
+   const track=stream.getAudioTracks()[0];
+   const healthy=track?.readyState==='live'&&!track.muted&&performance.now()-lastFrame<5000;
+   const status=healthy?'Работает':'Нет аудиосигнала от микрофона';
+   if(status!==microphoneHealth){
+    microphoneHealth=status;
+    if(!healthy)setVoiceStatus(status);
+    else setVoiceStatus('Жду «Джарвис»');
+   }
+  },2000);
+  processor.onaudioprocess=async event=>{
+   lastFrame=performance.now();
+   if(stopped||processing||voiceSpeaking||phrasePlayer){samples=[];previous=[];silence=0;return}
+   if(waitingUntil&&Date.now()>waitingUntil){waitingUntil=0;samples=[];setVoiceStatus('Жду «Джарвис»')}
+   const frame=event.inputBuffer.getChannelData(0);
+   const energy=Math.sqrt(frame.reduce((sum,value)=>sum+value*value,0)/frame.length);
+   const speech=energy>=.012;
+   if(!samples.length&&!speech){previous=Array.from(frame);return}
+   if(!samples.length)samples=previous.slice();
+   samples.push(...frame);
+   silence=speech?0:silence+frame.length;
+   const maximum=16000*(waitingUntil?25:7);
+   if(samples.length<maximum&&silence<11000)return;
+   const audio=encodeVoice(samples);samples=[];previous=[];silence=0;processing=true;
+   try{
+    if(waitingUntil){waitingUntil=0;await voiceAsk({audio});}
+    else if((await api('/dashboard/wake-local',{audio})).wake&&!stopped){
+     setVoiceStatus('Чем я могу помочь?');
+     await playPhrase('help',()=>!stopped).catch(()=>{});
+     if(!stopped){waitingUntil=Date.now()+15000;setVoiceStatus('Слушаю команду…')}
+    }
+    if(!waitingUntil&&!stopped)setVoiceStatus('Жду «Джарвис»');
+   }catch(error){if(!stopped)setVoiceStatus(error.message)}
+   finally{processing=false}
+  };
+ }catch(error){if(!stopped){stop();microphoneHealth=error.message;setVoiceStatus('Микрофон: '+error.message)}}
+}
+window.addEventListener('pagehide',()=>stopVoice?.());
+async function view(name){
+ cleanup?.();panel.querySelectorAll('audio').forEach(player=>player.pause());const stamp=++generation;panel.replaceChildren();
+ try{
+ if(name==='Настройки'){
+  const input=element('input','');input.type='password';input.placeholder='Ключ сервера';input.value=sessionStorage.token||'';
+  button('Сохранить',()=>{sessionStorage.token=input.value;view('Ассистент')});return;
+ }
+ if(name==='Ассистент'){
+  const orb=button('',()=>{active=!active;if(!active)stopVoice?.();view(name)});orb.id='orb';orb.setAttribute('aria-label',active?'Выключить ассистента':'Включить ассистента');
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=320;orb.append(canvas);
+  const ctx=canvas.getContext('2d'),r=128;
+  function draw(ms){
+   if(stamp!==generation)return;
+   const t=ms/1000;ctx.clearRect(0,0,320,320);ctx.save();ctx.translate(160,160);
+   function disk(radius,fill){ctx.beginPath();ctx.arc(0,0,radius,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill()}
+   function arc(radius,start,sweep,color,width){ctx.beginPath();ctx.arc(0,0,radius,start*Math.PI/180,(start+sweep)*Math.PI/180);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.stroke()}
+   function gradient(radius,stops){const g=ctx.createRadialGradient(0,0,0,0,0,radius);for(const [x,c] of stops)g.addColorStop(x,c);disk(radius,g)}
+   if(active){
+    const scale=1+Math.sin(t*1.6)*.008;ctx.scale(scale,scale);
+    gradient(r*1.18,[[0,'#9d39ff00'],[.6,'#9d39ff09'],[.84,'#9d39ff2d'],[1,'#9d39ff00']]);
+    gradient(r*.48,[[0,'#f3ffffaf'],[.32,'#91f1ff91'],[.72,'#7943df31'],[1,'#7943df00']]);
+    arc(r*.89,0,360,'#9d55f177',r*.009);
+    for(let i=0;i<60;i++){
+     const a=i*Math.PI/30,end=r*(i%5===0?1.03:.98);
+     ctx.beginPath();ctx.moveTo(Math.sin(a)*r*.93,Math.cos(a)*r*.93);ctx.lineTo(Math.sin(a)*end,Math.cos(a)*end);ctx.stroke();
+    }
+    arc(r,t*24,220,'#cc63ffcc',r*.019);
+    arc(r*.79,-t*35,140,'#b054ff',r*.025);
+    arc(r*.79,180-t*35,140,'#78ddffb9',r*.015);
+    arc(r*.59,t*49,255,'#7ce5ffd0',r*.012);
+    arc(r*.43,0,360,'#d9f9ff99',r*.008);
+   }else disk(r*.43,'#777e89');
+   ctx.restore();if(active)requestAnimationFrame(draw);
+  }
+  draw(performance.now());
+  if(!active)return;
+  const input=element('input','');input.placeholder='Сообщение для Jarvis';
+  let busy=false;
+  async function playReply(audio,answer){
+   if(!audio||!active)return;
+   const player=element('audio','',answer);
+   player.hidden=true;player.src='data:audio/wav;base64,'+audio;
+   voiceSpeaking=true;
+   try{
+    await new Promise((resolve,reject)=>{
+     player.onended=player.onpause=player.onerror=resolve;
+     player.play().catch(reject);
+    });
+   }catch{}finally{voiceSpeaking=false}
+  }
+  async function ask(body){
+   if(busy)return;busy=true;
+   const answer=element('article','…');
+   try{
+    const reply=await api('/ask',{...body,desktop:true,conversation_id:sessionStorage.conversation||''});
+    if(window.jarvisDesktop&&reply.screen_requested){
+     answer.textContent='Переключись на нужное окно. Снимок через 3 секунды.';
+     const shot=await api('/dashboard/local/screen',{});
+     const result=await api('/dashboard/operations/screen',{image:shot.image,question:reply.heard});
+     answer.textContent=result.reply;
+     await playReply(result.audio,answer);
+     return;
+    }
+    sessionStorage.conversation=reply.conversation_id;answer.textContent=reply.action?.kind==='route'?'Маршрут можно открыть в мобильном Jarvis.':reply.reply;
+    await playReply(reply.audio,answer);
+   }catch(e){answer.textContent=e.message}finally{busy=false}
+  }
+  button('Спросить',()=>{if(input.value.trim())ask({text:input.value.trim()})});
+  input.onkeydown=e=>{if(e.key==='Enter'&&input.value.trim())ask({text:input.value.trim()})};
+  const listening=element('p','');listening.className='meta';listening.setAttribute('role','status');
+  voiceAsk=ask;voiceStatus=listening;
+  if(!stopVoice)startVoice();
+  return;
+ }
+ if(name==='Решения'){
+  const result=await api('/dashboard/operations');if(stamp!==generation)return;
+  element('h2','Дедлайны из почты');
+  if(!result.decisions.length)element('p','Пока нет дедлайнов на подтверждение');
+  for(const decision of result.decisions){
+   const card=element('article',decision.title+' · '+decision.deadline);
+   element('p',decision.summary,card);
+   const detail=element('div','',card);
+   button('Расписание и материалы',async()=>{
+    try{
+     const data=await api('/dashboard/operations/decision/'+decision.id);detail.replaceChildren();
+     element('p','В календаре: '+(data.events.map(x=>x.start+' '+x.title).join(', ')||'свободно'),detail);
+     for(const item of data.materials)element('p',item.title+' · '+item.excerpt,detail);
+    }catch(error){detail.textContent=error.message}
+   },card);
+   if(decision.status==='pending')button('Подтвердить и запланировать подготовку',async()=>{
+    try{await api('/dashboard/operations/decision/'+decision.id,{});if(stamp===generation)view(name)}
+    catch(error){detail.textContent=error.message}
+   },card);
+   else element('p','Подготовка запланирована',card);
+  }
+  return;
+ }
+ if(name==='Календарь'){
+  const controls=element('div',''),calendar=element('section',''),agenda=element('section',''),editor=element('section','');
+  let selected=sessionStorage.calendarDay||'',request=0;
+  let monthKey='',monthEvents={};
+  const dateKey=d=>d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
+  async function openDay(day){
+   const id=++request;
+   try{
+    const data=await api('/dashboard/calendar'+(day?'?day='+encodeURIComponent(day):''));
+    if(stamp!==generation||id!==request)return;
+    if(monthKey!==data.day.slice(0,7)){
+     const events=await api('/dashboard/calendar/month?day='+encodeURIComponent(data.day));
+     if(stamp!==generation||id!==request)return;
+     monthEvents=events;monthKey=data.day.slice(0,7);
+    }
+    selected=data.day;sessionStorage.calendarDay=selected;
+    calendar.replaceChildren();agenda.replaceChildren();editor.replaceChildren();
+    const date=new Date(selected+'T12:00:00Z'),year=date.getUTCFullYear(),month=date.getUTCMonth();
+    const heading=element('div','',calendar);heading.className='card-head';
+    button('‹',()=>openDay(dateKey(new Date(Date.UTC(year,month-1,1)))),heading).setAttribute('aria-label','Предыдущий месяц');
+    element('strong',date.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}),heading);
+    button('›',()=>openDay(dateKey(new Date(Date.UTC(year,month+1,1)))),heading).setAttribute('aria-label','Следующий месяц');
+    const grid=element('div','',calendar);grid.className='month-grid';
+    for(const weekday of ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'])element('span',weekday,grid);
+    const start=(new Date(Date.UTC(year,month,1)).getUTCDay()+6)%7;
+    for(let i=0;i<start;i++)element('span','',grid);
+    for(let number=1;number<=new Date(Date.UTC(year,month+1,0)).getUTCDate();number++){
+     const key=dateKey(new Date(Date.UTC(year,month,number)));
+     const cell=button('',()=>openDay(key),grid);
+     cell.className='calendar-cell';cell.setAttribute('aria-pressed',String(key===selected));
+     element('strong',number,cell);
+     const rows=element('span','',cell);rows.className='calendar-rows';
+     for(const event of monthEvents[number]||[]){
+      const row=element('span',event.start+' '+event.title,rows);
+      row.className='calendar-event '+(event.travel?'travel':event.campus?'campus':'personal');
+      row.title=event.start+'–'+event.end+' '+event.title;
+     }
+    }
+    element('h2',date.toLocaleDateString('ru-RU',{day:'numeric',month:'long',timeZone:'UTC'}),agenda);
+    button('Добавить событие',()=>edit(null),agenda);
+    if(!data.events.length)element('p','На этот день событий нет',agenda);
+    for(const event of data.events){
+     const card=element('article','',agenda);
+     element('strong',event.reminder?'Напоминание · '+event.title:event.start+'–'+event.end+' · '+event.title,card);
+     if(event.notes)element('p',event.notes,card);
+     if(event.travel||event.reminder)card.classList.add('meta');
+     else button('Изменить',()=>edit(event),card);
+    }
+    const brief=element('details','',agenda);element('summary','Сводка дня',brief);
+    const content=element('section','',brief);
+    brief.addEventListener('toggle',async()=>{
+     if(!brief.open||content.childNodes.length)return;
+     try{
+      const data=await api('/dashboard/day-brief?day='+encodeURIComponent(selected));
+      for(const [label,items] of [['Задачи',data.tasks],['Важные письма',data.mail],['Пересечения',data.conflicts]]){
+       element('h3',label,content);
+       if(!items.length)element('p','Нет',content);
+       else for(const item of items)element('p',item,content);
+      }
+      const fields={};
+      for(const [slot,label] of [['morning','Утренняя сводка'],['evening','Вечерняя сводка']]){
+       const field=element('label',label,content),input=element('input','',field);
+       input.type='time';input.value=data.settings[slot];fields[slot]=input;
+      }
+      element('p','Пустое время отключает доставку. Время по Будапешту.',content).className='meta';
+      const status=element('p','',content);
+      button('Сохранить расписание',async()=>{
+       try{await api('/dashboard/day-brief',{morning:fields.morning.value,evening:fields.evening.value});status.textContent='Сохранено'}
+       catch(error){status.textContent=error.message}
+      },content);
+     }catch(error){element('p',error.message,content)}
+    });
+    if(data.moves.length){
+     element('h3','Переносы из почты',agenda);
+     for(const move of data.moves){
+      const card=element('article',move.title+' · '+move.occurrence+' → '+move.day+' '+move.start,agenda);
+      if(move.status==='pending')button('Подтвердить перенос',async()=>{
+       try{await api('/dashboard/calendar/mail/'+move.id,{});monthKey='';openDay(selected)}
+       catch(e){element('p',e.message,card)}
+      },card);
+      else element('p','Перенесено',card).className='meta';
+     }
+    }
+   }catch(e){if(stamp===generation&&id===request)element('p',e.message,agenda)}
+  }
+  function edit(event){
+   editor.replaceChildren();
+   const card=element('article','',editor);
+   function input(label,type,value){
+    const field=element('label',label,card),control=element('input','',field);control.type=type;control.value=value||'';return control;
+   }
+   const title=input('Название','text',event?.title),day=input('Дата','date',selected);
+   const start=input('Начало','time',event?.start),end=input('Конец','time',event?.end);
+   const notes=input('Заметка','text',event?.notes);
+   const campus=input('В университете','checkbox');campus.checked=Boolean(event?.campus);
+   const weekly=input('Каждую неделю','checkbox');weekly.checked=Boolean(event?.weekly);
+   const series=event?.weekly?input('Изменить всю серию','checkbox'):null;
+   const status=element('p','',card);
+   async function submit(operation){
+    try{
+     await api('/dashboard/calendar',{operation,id:event?.id,occurrence:selected,day:day.value,title:title.value,
+      start:start.value,end:end.value,notes:notes.value,campus:campus.checked,weekly:weekly.checked,series:Boolean(series?.checked)});
+     monthKey='';openDay(operation==='delete'?selected:day.value);
+    }catch(e){status.textContent=e.message}
+   }
+   button('Сохранить',()=>submit('save'),card);
+   if(event)button('Удалить',()=>{if(confirm('Удалить событие?'))submit('delete')},card);
+   button('Отмена',()=>editor.replaceChildren(),card);
+   editor.scrollIntoView({block:'nearest'});
+  }
+  button('Сегодня',()=>openDay(''),controls);
+  await openDay(selected);return;
+ }
+ if(name==='Почта'){
+  const status=element('p',''),list=element('section','');
+  status.className='meta';status.setAttribute('role','status');
+  let last='';
+  while(stamp===generation){
+   const result=await api('/dashboard/inbox');if(stamp!==generation)return;
+   status.textContent=!result.connected?'Ящик ещё не подключён':result.error?'Не удалось синхронизировать почту':result.pending?'Ожидают анализа: '+result.pending:result.refreshing?'Обновляю почту…':result.messages.length?'':'Входящих писем нет';
+   const current=JSON.stringify(result.messages);
+   if(current!==last){
+    last=current;list.replaceChildren();
+    for(const message of result.messages){
+     const card=element('article','',list);
+     element('strong',message.sender||'Отправитель неизвестен',card);
+     element('p',message.summary||'Краткое содержание пока недоступно',card).className='card-body';
+     const footer=element('div','',card);footer.className='meta card-head';
+     element('time',displayDate(message.date),footer);
+     element('span',message.importance==null?'Важность —':'Важность '+message.importance+'/10',footer);
+     button('Черновик ответа',async()=>{
+      const intent=prompt('Что нужно сказать в ответе?','');if(intent===null)return;
+      const output=element('p','Готовлю черновик…',card);
+      try{
+       const result=await api('/dashboard/operations/draft/'+message.fingerprint,{intent});
+       output.textContent='';const draft=element('textarea','',output);
+       draft.value=result.draft;draft.rows=8;draft.style.width='100%';
+       draft.setAttribute('aria-label','Черновик ответа');
+      }catch(error){output.textContent=error.message}
+     },card);
+    }
+   }
+   if(!result.connected)return;
+   await new Promise(resolve=>setTimeout(resolve,result.refreshing?5000:60000));
+  }return;
+ }
+ if(name==='Камеры'){
+  const data=await api('/dashboard/cameras');if(stamp!==generation)return;
+  button(data.recording?'Остановить запись':'Запустить запись',async()=>{try{await api('/dashboard/cameras/recording',{enabled:!data.recording});view(name)}catch(e){element('p',e.message)}});
+  const grid=element('section','');grid.className='camera-grid';
+  const controllers=[];
+  cleanup=()=>{for(const stop of controllers)stop();cleanup=null};
+  for(const camera of data.cameras){
+   const card=element('article','',grid);
+   element('h3',camera.name,card);
+   const image=element('img','',card),status=element('p','',card);
+   image.alt=camera.name;status.className='meta';
+   let processing=camera.processing;
+   const label=()=>processing?'Отключить обработку':'Включить обработку';
+   const toggle=button(label(),async()=>{
+    toggle.disabled=true;
+    try{
+     const result=await api('/dashboard/cameras/'+camera.id+'/processing',{enabled:!processing});
+     processing=result.processing;toggle.textContent=label();
+     state.textContent=processing?'Обработка включена':'Обработка отключена';
+    }catch(e){state.textContent=e.message}finally{toggle.disabled=false}
+   },card);
+   const state=element('p',processing?'Обработка включена':'Обработка отключена',card);state.className='meta';
+   (async()=>{
+   const controller=new AbortController();
+   let url=null,reader;
+   controllers.push(()=>{controller.abort();if(url)URL.revokeObjectURL(url);image.removeAttribute('src')});
+   try{
+    status.textContent='Подключение…';
+    const response=await fetch('/dashboard/cameras/'+camera.id+'/live',{signal:controller.signal,headers:{Authorization:'Bearer '+(sessionStorage.token||'')}});
+    if(!response.ok)throw Error('Камера недоступна: '+response.status);
+    image.style.transform='rotate('+Number(response.headers.get('X-Camera-Rotation')||0)+'deg)';
+    const mode=response.headers.get('X-Camera-Mode');
+    reader=response.body.getReader();
+    let pending=new Uint8Array();
+    while(stamp===generation){
+     const {value,done}=await reader.read();if(done)break;
+     const bytes=new Uint8Array(pending.length+value.length);bytes.set(pending);bytes.set(value,pending.length);
+     let offset=0;
+     while(offset+4<=bytes.length){
+      const size=new DataView(bytes.buffer).getUint32(offset);
+      if(size<4||size>2097152)throw Error('Некорректный кадр');
+      if(offset+4+size>bytes.length)break;
+      const next=URL.createObjectURL(new Blob([bytes.subarray(offset+4,offset+4+size)],{type:'image/jpeg'}));
+      image.src=next;if(url)URL.revokeObjectURL(url);url=next;status.textContent=mode==='snapshots'?'Просмотр кадрами':'';
+      offset+=4+size;
+     }
+     pending=bytes.slice(offset);
+    }
+    if(stamp===generation)status.textContent='Поток завершился';
+   }catch(e){if(!controller.signal.aborted)status.textContent=e.message}
+   finally{reader?.cancel().catch(()=>{})}
+   })();
+  }return;
+ }
+ if(name==='Новости'){
+  const data=await api('/dashboard/news');if(stamp!==generation)return;
+  for(const topic of data.topics){
+   element('h2',topic.name);
+   const cache=topic.cache,items=cache?.data?.items||[];
+   if(cache?.updated_at)element('p','Обновлено '+displayDate(cache.updated_at)).className='meta';
+   if(!items.length)element('p','Ожидает первую сводку');
+   for(const item of items){
+    const card=element('article','');
+    const suffix=item.source?' - '+item.source:'';
+    const title=suffix&&item.title.endsWith(suffix)?item.title.slice(0,-suffix.length):item.title;
+    let link;
+    try{const url=new URL(item.article_url||item.url);if(['https:','http:'].includes(url.protocol))link=url}catch{}
+    const heading=element(link?'a':'strong',title,card);heading.className='news-title';
+    if(link){heading.href=link.href;heading.target='_blank';heading.rel='noopener noreferrer'}
+    const detail=[item.source,displayDate(item.published_at)].filter(Boolean).join(' · ');
+    if(item.summary)element('p',item.summary,card).className='card-body';
+    else if(item.article_unavailable)element('p','Текст статьи недоступен',card).className='meta card-body';
+    const footer=element('div','',card);footer.className='meta card-head card-body';
+    if(detail)element('span',detail,footer);
+    element('span',item.importance==null?(item.article_unavailable?'':'Анализ в очереди'):'Важность '+item.importance+'/10',footer);
+   }
+  }return;
+ }
+ const [result,background,newsSettings]=await Promise.all([api('/developer/jobs'),api('/dashboard/background'),api('/dashboard/news-topics')]);if(stamp!==generation)return;
+ element('h2','Темы новостей');
+ const topicForm=element('article','');
+ const topicName=element('input','',topicForm);topicName.placeholder='Название темы';topicName.maxLength=100;topicName.setAttribute('aria-label','Название темы');
+ const topicQuery=element('input','',topicForm);topicQuery.placeholder='Поисковый запрос (необязательно)';topicQuery.maxLength=240;topicQuery.setAttribute('aria-label','Поисковый запрос');
+ const interval=element('select','',topicForm);interval.setAttribute('aria-label','Частота обновления');
+ for(const [minutes,label] of [[15,'Каждые 15 мин'],[30,'Каждые 30 мин'],[60,'Каждый час'],[180,'Каждые 3 часа']])element('option',label,interval).value=minutes;
+ interval.value='60';
+ const status=element('p','',topicForm);status.setAttribute('role','status');
+ const save=button('Сохранить тему',async()=>{
+  if(!topicName.value.trim()){status.textContent='Укажи название темы';return}
+  save.disabled=true;
+  try{await api('/dashboard/news-topics',{name:topicName.value,query:topicQuery.value,interval:Number(interval.value)});if(stamp===generation)view(name)}
+  catch(e){status.textContent=e.message;save.disabled=false}
+ },topicForm);
+ for(const topic of newsSettings.topics){
+  const card=element('article','');
+  element('strong',topic.name,card);
+  element('p',topic.query+' · каждые '+topic.interval+' мин',card).className='meta card-body';
+  button('Настроить',()=>{
+   topicName.value=topic.name;topicName.readOnly=true;topicQuery.value=topic.query;interval.value=String(topic.interval);topicQuery.focus();
+  },card);
+ }
+ button('Новая тема',()=>{topicName.readOnly=false;topicName.value='';topicQuery.value='';interval.value='60';topicName.focus()},topicForm);
+ element('h2','Фоновые задачи');
+ for(const job of background.jobs){
+  const card=element('article',job.name+' · '+(job.enabled?'активна':'пауза'),panel);
+  button(job.enabled?'Приостановить':'Возобновить',async()=>{try{await api('/dashboard/background/'+job.id,{enabled:!job.enabled});view(name)}catch(e){element('p',e.message,card)}},card);
+ }
+ element('h2','Мониторинг предложений');
+ const monitor=element('article','');
+ const url=element('input','',monitor);url.placeholder='Публичный адрес RSS';
+ const criteria=element('input','',monitor);criteria.placeholder='Критерии поиска';
+ const monitorStatus=element('p','',monitor);
+ button('Отслеживать',async()=>{
+  try{await api('/dashboard/operations/offers',{url:url.value,criteria:criteria.value});monitorStatus.textContent='Мониторинг включён'}
+  catch(error){monitorStatus.textContent=error.message}
+ },monitor);
+ element('h2','Диагностика');
+ const diagnostics=element('article','');
+ button('Проверить сервер',async()=>{
+  try{
+   const [host,status,cameras]=await Promise.all([api('/dashboard/operations/host'),api('/dashboard/operations'),api('/dashboard/cameras')]);
+   diagnostics.textContent='CPU '+host.cpu+'% · память '+host.memory+'%';
+   for(const disk of host.disks)element('p',disk.name+' · '+disk.health+(disk.temperature?' · '+disk.temperature+' °C':''),diagnostics);
+   for(const service of host.services)element('p',service.name+' · '+service.state,diagnostics);
+   element('p','Ollama: '+(status.models.ollama?status.models.models.join(', '):'недоступен'),diagnostics);
+   element('p','Микрофон: '+microphoneHealth,diagnostics);
+   for(const [check,failures] of Object.entries(status.checks||{}))
+    element('p',check+' · '+(failures?'сбой ('+failures+')':'работает'),diagnostics);
+   element('p','Очередь почты: '+status.mail_pending+' · камер настроено: '+cameras.cameras.length,diagnostics);
+   button('Перезапустить рекордер',async()=>{
+    if(!confirm('Перезапустить запись с камер?'))return;
+    try{const result=await api('/dashboard/operations/restart',{name:'ESP32CameraRecorder',confirmed:true});element('p',result.recording?'Рекордер запущен':'Рекордер не запустился',diagnostics)}
+    catch(error){element('p',error.message,diagnostics)}
+   },diagnostics);
+  }catch(error){diagnostics.textContent=error.message}
+ },diagnostics);
+ element('h2','Агент-разработчик');
+ element('p','Разработка агента приостановлена');
+ for(const job of result.jobs||[])element('article',(job.title||job.project||job.id||'Задача')+' · '+(job.state||job.stage||job.status||''));
+ }catch(e){if(stamp===generation)element('p',e.message)}
+}
+for(const name of (mobile?['Календарь','Решения','Почта','Камеры','Новости','Субагенты']:['Ассистент','Календарь','Решения','Почта','Камеры','Новости','Субагенты','Настройки']))button(name,()=>view(name),tabs);
+if(window.jarvisDesktop){
+ const started=Number(sessionStorage.jarvisStarted)||Date.now();
+ sessionStorage.jarvisStarted=String(started);
+ let announced;
+ try{announced=new Set(JSON.parse(sessionStorage.jarvisAnnounced||'[]'))}catch{announced=new Set()}
+ async function checkImportantMail(){
+  if(sessionStorage.token){
+   try{
+    const {messages}=await api('/dashboard/inbox');
+    for(const message of messages){
+     if(message.importance<5||!Number.isFinite(message.importance)||Date.parse(message.date)<started||!message.date||announced.has(message.fingerprint))continue;
+     if(voiceSpeaking||phrasePlayer)break;
+     await playPhrase('mail');
+     announced.add(message.fingerprint);
+     sessionStorage.jarvisAnnounced=JSON.stringify([...announced].slice(-100));
+    }
+   }catch{}
+  }
+  setTimeout(checkImportantMail,20000);
+ }
+ checkImportantMail();
+}
+view(mobile?'Календарь':sessionStorage.token?'Ассистент':'Настройки');
+</script></html>

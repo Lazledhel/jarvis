@@ -2,3 +2,4 @@
 coqui-tts
 torch
 spacy==3.8.18
+num2words

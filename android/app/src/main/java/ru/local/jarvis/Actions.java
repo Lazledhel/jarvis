@@ -8,6 +8,8 @@ final class Actions{
  static boolean vpnActive(Context c){try{ConnectivityManager m=(ConnectivityManager)c.getSystemService(Context.CONNECTIVITY_SERVICE);NetworkCapabilities caps=m.getNetworkCapabilities(m.getActiveNetwork());return caps!=null&&caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN);}catch(Exception e){return false;}}
  static void offer(Context c,JSONObject action,String session)throws Exception{
   boolean en=action.optString("language").equals("en");String kind=action.optString("kind"),id=action.optString("id");if(!id.matches("[a-f0-9]{32}"))throw new Exception("Недопустимое действие");Item item=new Item(action,session);
+  if(kind.equals("schedule")){String result;try{result=LocalSchedule.apply(c,action);}catch(Exception e){result="Не удалось настроить напоминание: "+e.getMessage();}Assistant.status=result;Assistant.last+="\n\n"+result;report(c,item,result);return;}
+  if(DeviceControls.handles(kind)&&DeviceControls.direct(c,kind)){String result;try{result=DeviceControls.execute(c,action);}catch(Exception e){result=DeviceControls.tr(action,"Не удалось выполнить команду: ","Could not execute command: ")+e.getMessage();}Assistant.status=result;Assistant.last+="\n\n"+result;report(c,item,result);return;}
   if(kind.equals("vpn")){
    if(!action.has("enabled"))throw new Exception("Не указано состояние VPN");boolean enable=action.getBoolean("enabled");
    if(vpnActive(c)==enable){Assistant.status=enable?(en?"VPN is already connected":"VPN уже подключён"):(en?"VPN is already disconnected":"VPN уже отключён");report(c,item,Assistant.status);return;}
@@ -15,12 +17,12 @@ final class Actions{
    boolean matched=false;int stable=0;for(int n=0;n<24;n++){Thread.sleep(350);stable=vpnActive(c)==enable?stable+1:0;if(stable>=3){matched=true;break;}}
    String result=matched?(enable?(en?"VPN connected":"VPN подключён"):(en?"VPN disconnected":"VPN отключён")):(en?"VPN command sent; state change was not confirmed":"Команда VPN отправлена, изменение состояния не подтверждено");Assistant.last+="\n\n"+result;Assistant.status=result;report(c,item,result);return;
   }
-  if(!kind.equals("call")&&!kind.equals("route"))throw new Exception("Действие не поддерживается");
+  if(!kind.equals("call")&&!kind.equals("route")&&!DeviceControls.handles(kind)&&!kind.equals("import_document"))throw new Exception("Действие не поддерживается");
   synchronized(Actions.class){pending.clear();pending.put(id,item);}
   NotificationManager nm=c.getSystemService(NotificationManager.class);nm.createNotificationChannel(new NotificationChannel("actions","Джарвис · действия",NotificationManager.IMPORTANCE_HIGH));
   Intent intent=new Intent(c,ActionScreen.class).putExtra("id",id).putExtra("language",action.optString("language","ru")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
   PendingIntent pi=PendingIntent.getActivity(c,83,intent,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-  String title=kind.equals("call")?(en?"Confirm call":"Подтвердить звонок"):(en?"Open directions":"Открыть маршрут");
+  String title=kind.equals("call")?(en?"Confirm call":"Подтвердить звонок"):kind.equals("route")?(en?"Open directions":"Открыть маршрут"):(en?"Jarvis · phone action":"Джарвис · действие на телефоне");
   nm.notify(83,new Notification.Builder(c,"actions").setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle(title).setContentText(action.optString("target")).setContentIntent(pi).setAutoCancel(true).setVisibility(Notification.VISIBILITY_PRIVATE).setTimeoutAfter(120000).build());
   if(Main.foreground||Settings.canDrawOverlays(c))try{c.startActivity(intent);}catch(Exception ignored){}
  }

@@ -3,7 +3,9 @@ from pathlib import Path
 if __name__=='__main__':
  sys.stdout=open(Path(__file__).parent/'worker.log','a',encoding='utf-8',buffering=1);sys.stderr=sys.stdout
 from dotenv import dotenv_values
+from speech_normalization import normalize
 ROOT=Path(__file__).parent
+SUPPORTED_LANGUAGES=set(json.loads((ROOT/'model/config.json').read_text(encoding='utf-8')).get('languages',['ru','en']))
 TOKEN=dotenv_values(os.getenv('JARVIS_ENV_FILE',str(ROOT/'.env')))['PHONE_TOKEN']
 import numpy as np,torch
 from fastapi import FastAPI,Request,HTTPException,Response
@@ -41,7 +43,7 @@ def render(text,lang,effects=True):
   raise
  t=time.perf_counter()
  with torch.inference_mode():
-  result=model.inference(text,lang,*conditioning,temperature=0.65,repetition_penalty=5.0,speed=1.06,enable_text_splitting=True)
+  result=model.inference(normalize(text,lang),lang,*conditioning,temperature=0.55,repetition_penalty=5.0,speed=1.0,enable_text_splitting=True)
  wav=np.asarray(result['wav'],dtype=np.float32)
  if not len(wav) or not np.isfinite(wav).all():raise ValueError('Invalid audio')
  if effects:
@@ -76,7 +78,7 @@ async def speak(request:Request):
    if len(body)>20000:raise HTTPException(413)
   try:data=json.loads(body);text=data['text'];lang=data['lang']
   except Exception:raise HTTPException(400)
-  if not isinstance(text,str) or not text.strip() or len(text)>3500 or lang not in ('ru','en'):raise HTTPException(400)
+  if not isinstance(text,str) or not text.strip() or len(text)>3500 or lang not in SUPPORTED_LANGUAGES:raise HTTPException(400)
   from starlette.concurrency import run_in_threadpool
   audio=await run_in_threadpool(render,text,lang)
   return Response(audio,media_type='audio/wav')
