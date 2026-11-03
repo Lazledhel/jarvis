@@ -103,3 +103,14 @@ Whisper и XTTS загружаются только при распознава�
 Интервал задаётся переменной окружения `JARVIS_GPU_IDLE_SECONDS`
 для обоих серверных процессов (по умолчанию 60). После холодного старта
 ответ дольше; небольшая служебная память CUDA может сохраняться в процессе.
+
+### Jarvis dashboard
+
+Android 2.9 opens the shared dashboard from **Панель Jarvis**. It uses the
+same provisioned HTTPS connection as voice commands. For the Windows client,
+install `vosk` and `Pillow` in the Python environment, set `JARVIS_SERVER_URL`
+and `JARVIS_SERVER_CERT`, then run `desktop/Start-Jarvis.ps1`. Set
+`JARVIS_WAKE_ASSETS` if the two Vosk models are stored outside the Android
+assets directory. An optional local `provision.json` supplies the desktop
+token. Keep provisioning files, certificates used for deployment, signing
+keys, and mail credentials outside version control.
